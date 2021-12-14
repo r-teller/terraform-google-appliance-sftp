@@ -1,0 +1,53 @@
+#! /bin/bash
+if [[ -f /etc/startup_was_launched ]]; then exit 0; fi
+
+apt-get update && apt-get install acl -y
+
+mkdir /data
+mkdir /data/sftp
+chmod 650 /data/sftp
+
+## Create Local Group
+addgroup sftp-users-admin
+addgroup sftp-users-guest
+
+setfacl -Rm g:sftp-users-admin:rwx /data/sftp
+setfacl -Rm g:sftp-users-guest:rx /data/sftp
+
+usermod -m r-teller -g sftp-users-guest
+usermod pandas -g sftp-users-admin
+
+## Loop through users in local.sftpUsers and create local user
+## Based on their role, set the appropriate default group
+%{ for user in sftpUsers ~}
+    %{ if user.role == "admin"}
+        useradd -m ${user.userName} -g sftp-users-admin
+    %{ endif }
+    %{ if user.role == "guest"}
+        useradd -m ${user.userName} -g sftp-users-guest
+    %{ endif }
+
+    ## Setup Authorized Keys for Local User
+    mkdir /home/${user.userName}/.ssh
+    echo ${user.publicKey} >> /home/${user.userName}/.ssh/authorized_keys
+    chown -R ${user.userName} /home/${user.userName}/.ssh
+    chmod 700 /home/${user.userName}/.ssh
+    chmod 600 /home/${user.userName}/.ssh/authorized_keys
+%{ endfor ~}
+
+## Update sshd to limit sftpUsers to sftp only
+cat  << EOF >> /etc/ssh/sshd_config
+
+# Added to limit sftp-users and prevent terminal access
+Match group sftp-users-guest,sftp-users-admin
+ChrootDirectory /data/sftp 
+X11Forwarding no 
+AllowTcpForwarding no 
+ForceCommand internal-sftp
+EOF
+
+## Restart SSHD Service
+service sshd restart
+
+## Create file to let this script know that it has already been ran
+touch /etc/startup_was_launched
